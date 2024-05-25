@@ -19,6 +19,8 @@
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 import json
 from typing import Optional
+from urllib.parse import urljoin
+
 from httpx import RequestError
 
 from wapitiCore.net import Request
@@ -40,7 +42,8 @@ class ModuleDrupalEnum(CommonCMS):
     async def check_drupal(self, url):
         check_list = ['core/misc/drupal.js', 'misc/drupal.js']
         for item in check_list:
-            request = Request(f'{url}{item}', 'GET')
+            item_url = urljoin(url, item)
+            request = Request(item_url, 'GET')
             try:
                 response: Response = await self.crawler.async_send(request, follow_redirects=True)
             except RequestError:
@@ -67,32 +70,44 @@ class ModuleDrupalEnum(CommonCMS):
 
     async def attack(self, request: Request, response: Optional[Response] = None):
         self.finished = True
-        request_to_root = Request(request.url)
+        is_drupal_detected = False
+        target_url = [request.url]
+        root_url = self.get_root_url(request.url)
+        if request.url != root_url:
+            target_url.append(root_url)
 
-        if await self.check_drupal(request_to_root.url):
-            await self.detect_version(self.PAYLOADS_HASH, request_to_root.url)  # Call the method on the instance
-            self.versions = sorted(self.versions, key=lambda x: x.split('.')) if self.versions else []
+        request_to_root = request
 
-            drupal_detected = {
-                "name": "Drupal",
-                "versions": self.versions,
-                "categories": ["CMS Drupal"],
-                "groups": ["Content"]
-            }
+        for url in target_url:
+            request_to_root = Request(url)
 
+            if await self.check_drupal(request_to_root.url):
+                is_drupal_detected = True
+                await self.detect_version(self.PAYLOADS_HASH, request_to_root.url)  # Call the method on the instance
+                self.versions = sorted(self.versions, key=lambda x: x.split('.')) if self.versions else []
+                if self.versions:
+                    break
+
+        drupal_detected = {
+            "name": "Drupal",
+            "versions": self.versions,
+            "categories": ["CMS Drupal"],
+            "groups": ["Content"]
+        }
+
+        if self.versions:
+            await self.add_vuln_info(
+                category=WEB_APP_VERSIONED,
+                request=request_to_root,
+                info=json.dumps(drupal_detected),
+                wstg=WEB_WSTG_CODE
+            )
+        if is_drupal_detected:
             log_blue(
                 MSG_TECHNO_VERSIONED,
                 "Drupal",
                 self.versions
             )
-
-            if self.versions:
-                await self.add_vuln_info(
-                    category=WEB_APP_VERSIONED,
-                    request=request_to_root,
-                    info=json.dumps(drupal_detected),
-                    wstg=WEB_WSTG_CODE
-                )
             await self.add_addition(
                 category=TECHNO_DETECTED,
                 request=request_to_root,
